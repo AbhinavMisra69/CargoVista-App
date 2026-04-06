@@ -30,14 +30,14 @@ struct City {
         : id(id), name(name), lat(lat), lon(lon) {}
 };
 
-// Global Data Structures
+//Global Data Structures
 vector<City> cities; 
 vector<vector<double>> distBtwCities;
 vector<vector<City>> clusters;
 vector<City> hubs;
 json conclusion;
 
-// Helper to store per-order results for comparison
+//Helper to store per-order results for comparison
 struct ModelResult {
     long long orderId;
     int time;
@@ -46,7 +46,7 @@ struct ModelResult {
     json routeInfo;   
 };
 
-// Global Result Maps
+//Global Result Maps
 unordered_map<long long, ModelResult> hsResults;
 unordered_map<long long, ModelResult> p2pResults;
 
