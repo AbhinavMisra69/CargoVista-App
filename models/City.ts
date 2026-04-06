@@ -1,27 +1,25 @@
-import mongoose, { Schema, Document } from 'mongoose';
-import { City } from '@/types';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 
-interface ICityDocument extends City, Document {}
+// 1. Define the Interface
+export interface ICity extends Document {
+  id: number;
+  name: string;
+  lat: number;
+  lon: number;
+  clusterId?: number; 
+}
 
-// 1. Define the base Schema
-// We set _id: false because when this is used inside SystemConfig, 
-// we don't want Mongoose generating unique ObjectIds for every single city entry.
-export const CitySchema = new Schema({
-  id: { type: Number, required: true },
-  name: { type: String, required: true },
-  lat: { type: Number, required: true },
-  lon: { type: Number, required: true }
-}, { _id: false });
-
-// 2. Define the Collection Schema
-// For the actual 'cities' collection, we DO want standard Mongoose behavior (with _ids),
-// so we create a new schema that inherits or re-defines the fields.
-const CityCollectionSchema = new Schema<ICityDocument>({
+// 2. Define the Schema
+const CitySchema: Schema = new Schema({
   id: { type: Number, required: true, unique: true },
   name: { type: String, required: true },
   lat: { type: Number, required: true },
-  lon: { type: Number, required: true }
+  lon: { type: Number, required: true },
+  clusterId: { type: Number },
 });
 
-// Export the Model (for dropdowns)
-export default mongoose.models.City || mongoose.model<ICityDocument>('City', CityCollectionSchema);
+// 3. Create the Model (Prevent Overwrite)
+// This check is crucial for Next.js hot-reloading
+const City: Model<ICity> = mongoose.models.City || mongoose.model<ICity>('City', CitySchema);
+
+export default City;

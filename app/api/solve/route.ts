@@ -1,29 +1,26 @@
+// app/api/solve/route.ts
+
 import { spawn } from "child_process";
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/mongoose";
 import { SystemConfig } from "@/models/SystemConfig";
-import {
-  HubSpokeOrder,
-  P2POrder,
-  PersonalizedOrder,
-} from "@/models/orders";
+import { HubSpokeOrder, P2POrder, PersonalizedOrder } from "@/models/orders";
 
 export async function POST(req: NextRequest) {
   try {
     await connectToDatabase();
 
     const body = await req.json();
-    const { orderDetails, goal } = body ?? {};
+    
+    // --- FIX: Destructure 'currentOrders' array instead of single 'orderDetails' ---
+    const { currentOrders, goal } = body ?? {};
 
-    if (!orderDetails) {
-      return NextResponse.json(
-        { error: "orderDetails is required" },
-        { status: 400 }
-      );
+    if (!currentOrders || !Array.isArray(currentOrders) || currentOrders.length === 0) {
+      return NextResponse.json({ error: "currentOrders array is required" }, { status: 400 });
     }
 
-    // 1. Fetch Network Memory and all existing orders
+    // 1. Fetch Network Memory
     const [config, hsOrders, p2pOrders, persOrders] = await Promise.all([
       SystemConfig.findOne({ key: "network_data" }),
       HubSpokeOrder.find({}).lean(),
@@ -32,116 +29,106 @@ export async function POST(req: NextRequest) {
     ]);
 
     if (!config) {
-      return NextResponse.json(
-        { error: "Network not initialized. Please seed the network data first." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Network not initialized." }, { status: 500 });
     }
 
-    // 2. Prepare the Payload for solver.cpp
+    // 2. Prepare Payload for Solver
+    // Create priority map for ALL orders in the current batch
+    const orderPriorityMap: Record<string, number> = {};
+    currentOrders.forEach((order: any) => {
+        orderPriorityMap[order.orderId.toString()] = order.priority || 0;
+    });
+
     const payload = {
       distMatrix: config.distMatrix,
       clusters: config.clusters,
       hubs: config.hubs,
-      curSellerOrders: [orderDetails], // The new order being tested
+      curSellerOrders: currentOrders, // Pass the FULL ARRAY here
       ordersHubSpoke: hsOrders,
       ordersP2P: p2pOrders,
       ordersPersonalised: persOrders,
-      goal: goal || "cost", // User's optimization preference
-      prioritize: orderDetails.priority === 1,
+      goal: goal || "cost",
+      prioritize: currentOrders.some((o: any) => o.priority === 1), // True if ANY order is priority
+      orderPriority: orderPriorityMap
     };
+    console.log("Payload: ",payload);
+    console.log("orderPriority:",payload["orderPriority"]);
 
-    // 3. Spawn the Solver Binary
+    // 3. Spawn Solver
     const solverPath = path.resolve(process.cwd(), "solver/bin/solver");
-    console.log("Solver path:", solverPath);
-
     const child = spawn(solverPath);
 
     let outputData = "";
     let errorData = "";
 
-    // Send payload to C++ stdin
     child.stdin.write(JSON.stringify(payload));
     child.stdin.end();
 
-    // Capture C++ result from stdout
     for await (const chunk of child.stdout) {
       outputData += chunk.toString();
     }
-
-    // Capture errors from stderr
     for await (const chunk of child.stderr) {
       errorData += chunk.toString();
     }
 
-    // Wait for process to exit
     const exitCode = await new Promise<number>((resolve) => {
       child.on("close", resolve);
     });
 
-    if (exitCode !== 0 || errorData) {
-      console.error("Solver error:", errorData);
+    if (exitCode !== 0) {
+      console.error("❌ Solver C++ Error:", errorData);
       return NextResponse.json(
-        {
-          error: "Solver execution failed",
-          details: errorData || `Process exited with code ${exitCode}`,
-        },
+        { error: "Solver failed", details: errorData },
         { status: 500 }
       );
     }
 
-    if (!outputData) {
-      return NextResponse.json(
-        { error: "Solver returned no output" },
-        { status: 500 }
-      );
+    let conclusion;
+    try {
+        conclusion = JSON.parse(outputData);
+    } catch (e) {
+        console.error("❌ JSON Parse Failed. Raw Output:", outputData);
+        return NextResponse.json({ error: "Invalid JSON from solver" }, { status: 500 });
     }
+    console.log("output:", conclusion);
+    // Check if hubSpoke data exists
+    // Check if hubSpoke data exists
+    if (conclusion.hubSpoke && Array.isArray(conclusion.hubSpoke.routes)) {
+      console.log("🚚 --- Hub & Spoke Routes ---");
+      
+      // FIX: Add ': any' and ': number' types
+      conclusion.hubSpoke.routes.forEach((routeItem: any, index: number) => {
+          const path = routeItem.route || routeItem.path;
+          const id = routeItem.orderId || "Unknown ID";
+          
+          console.log(`Order #${index + 1} (ID: ${id}):`, path);
+      });
+  } else {
+      console.log("⚠️ No Hub & Spoke routes found in conclusion.");
+  }
 
-    const conclusion = JSON.parse(outputData);
-
-    // 4. LOGIC: Determine the "Storage Bucket"
-    // We choose the model based on the user's 'goal' (lowest cost or lowest time)
+    // Determine Winner Logic (remains same)
     let bestModel: "hubSpoke" | "pointToPoint" | "personalized";
-
     if (goal === "time") {
       const times = [
         { model: "hubSpoke", val: conclusion.hubSpoke?.totalTime || Infinity },
-        {
-          model: "pointToPoint",
-          val: conclusion.pointToPoint?.totalTime || Infinity,
-        },
+        { model: "pointToPoint", val: conclusion.pointToPoint?.totalTime || Infinity },
         { model: "personalized", val: conclusion.personalized?.time || Infinity },
       ];
-      bestModel = times.sort((a, b) => a.val - b.val)[0]
-        .model as typeof bestModel;
+      bestModel = times.sort((a, b) => a.val - b.val)[0].model as typeof bestModel;
     } else {
       const costs = [
         { model: "hubSpoke", val: conclusion.hubSpoke?.totalCost || Infinity },
-        {
-          model: "pointToPoint",
-          val: conclusion.pointToPoint?.totalCost || Infinity,
-        },
+        { model: "pointToPoint", val: conclusion.pointToPoint?.totalCost || Infinity },
         { model: "personalized", val: conclusion.personalized?.cost || Infinity },
       ];
-      bestModel = costs.sort((a, b) => a.val - b.val)[0]
-        .model as typeof bestModel;
+      bestModel = costs.sort((a, b) => a.val - b.val)[0].model as typeof bestModel;
     }
 
-    // 5. Save the order to the winner's "Storage Bucket" (optional - we already saved it)
-    // The order is already saved in our main flow, so we can skip this or update status
+    return NextResponse.json({ winner: bestModel, ...conclusion });
 
-    // 6. Return the full conclusion to the Frontend
-    return NextResponse.json({
-      winner: bestModel,
-      ...conclusion,
-    });
-  } catch (error: unknown) {
-    console.error("Solver API Error:", error);
-    const message =
-      error instanceof Error ? error.message : "Optimization failed";
-    return NextResponse.json(
-      { error: "Optimization failed", details: message },
-      { status: 500 }
-    );
+  } catch (error: any) {
+    console.error("API Error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

@@ -2,9 +2,11 @@
 const fs = require('fs');
 const path = require('path');
 const envPath = path.join(__dirname, '..', '.env.local');
+
 if (fs.existsSync(envPath)) {
   const envFile = fs.readFileSync(envPath, 'utf8');
-  envFile.split('\n').forEach(line => {
+  // FIX: Added ': string' type annotation below
+  envFile.split('\n').forEach((line: string) => {
     const match = line.match(/^([^=]+)=(.*)$/);
     if (match) {
       const key = match[1].trim();
@@ -20,7 +22,7 @@ if (fs.existsSync(envPath)) {
 
 const { execSync } = require('child_process');
 const { connectToDatabase } = require('../lib/mongoose');
-const City = require('../models/City');
+const City = require('../models/City').default;
 const {SystemConfig} = require('../models/SystemConfig');
 
 async function runStep1() {

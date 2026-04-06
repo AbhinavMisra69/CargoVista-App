@@ -44,24 +44,34 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
-export const api = {
-  // Sellers
-  listSellers: () => apiFetch<Seller[]>("/api/sellers"),
-  createSeller: (input: CreateSellerInput) =>
-    apiFetch<Seller>("/api/sellers", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
+// lib/api-client.ts
 
-  // Orders by type
-  listOrders: (type: OrderType, sellerId?: number) => {
-    const qs = sellerId != null ? `?sellerId=${encodeURIComponent(String(sellerId))}` : "";
-    return apiFetch<Order[]>(`/api/orders/${type}${qs}`);
-  },
-  createOrder: (type: OrderType, input: CreateOrderInput) =>
-    apiFetch<Order>(`/api/orders/${type}`, {
+export const api = {
+  createOrder: async (type: string, orderData: any) => {
+    // Determine the 'type' string expected by the backend switch-case
+    // Map your frontend types (e.g., 'cost_efficient') to DB models ('HubSpoke')
+    let dbType = "HubSpoke"; // Default
+    
+    if (type === "speed") dbType = "P2P";
+    if (type === "priority" || orderData.priority === 1) dbType = "Personalized";
+    // Or if you pass 'HubSpoke' directly, use that.
+    
+    const response = await fetch("/api/orders", {
       method: "POST",
-      body: JSON.stringify(input),
-    }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: dbType, // <--- CRITICAL: This tells the backend which table to use
+        ...orderData
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || "Failed to create order");
+    }
+
+    return response.json();
+  }
 };
+
 

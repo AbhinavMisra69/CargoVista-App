@@ -1,96 +1,97 @@
 "use client"
 
-import { MapContainer, TileLayer, Marker, Polyline, Tooltip, useMap } from "react-leaflet"
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from "react-leaflet"
 import "leaflet/dist/leaflet.css"
 import L from "leaflet"
 import { useEffect } from "react"
+// IMPORT DATA FROM NEW FILE
+import { City, NORTH_INDIA_CITIES } from "./cityData"
 
-// --- FIX: Leaflet Default Icons ---
-const iconRetinaUrl = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png';
-const iconUrl = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png';
-const shadowUrl = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png';
+const iconUrl = "https://unpkg.com/leaflet@1.9.3/dist/images/marker-icon.png";
+const iconRetinaUrl = "https://unpkg.com/leaflet@1.9.3/dist/images/marker-icon-2x.png";
+const shadowUrl = "https://unpkg.com/leaflet@1.9.3/dist/images/marker-shadow.png";
 
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({ iconRetinaUrl, iconUrl, shadowUrl });
+const defaultIcon = L.icon({
+  iconUrl,
+  iconRetinaUrl,
+  shadowUrl,
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
 
-// --- TYPES ---
-export type City = { name: string; coords: [number, number] }
-
-export type RouteData = { 
-  path: [number, number][] 
-  color?: string
-  cityNames: string[] // The whitelist of cities to show
-}
-
-// --- PROPS ---
 interface MapDisplayProps {
-  allCities: City[]
-  activeRoute: RouteData | null
+  allCities?: City[]
+  activeRoute?: {
+    pathNames: string[] 
+    color: string
+  }
 }
 
-// --- CONTROLLER ---
-function MapController({ route }: { route: RouteData | null }) {
+function MapUpdater({ bounds }: { bounds: L.LatLngBoundsExpression }) {
   const map = useMap()
   useEffect(() => {
-    if (route && route.path.length > 0) {
-      const routeBounds = L.latLngBounds(route.path)
-      map.fitBounds(routeBounds, { padding: [50, 50], maxZoom: 9 })
-    } else {
-      map.flyTo([29.5, 77.5], 7, { duration: 1.5 }) 
+    if (bounds) {
+      map.fitBounds(bounds as L.LatLngBoundsExpression, { padding: [50, 50] })
     }
-  }, [route, map])
+  }, [bounds, map])
   return null
 }
 
-export default function MapDisplay({ allCities, activeRoute }: MapDisplayProps) {
+export default function MapDisplay({ allCities = NORTH_INDIA_CITIES, activeRoute }: MapDisplayProps) {
+  let routeCoordinates: [number, number][] = []
+  let bounds: L.LatLngBoundsExpression | null = null
+
+  if (activeRoute && activeRoute.pathNames.length > 0) {
+    routeCoordinates = activeRoute.pathNames
+      .map(name => allCities.find(c => c.name === name)?.coords)
+      .filter((coords): coords is [number, number] => coords !== undefined)
+
+    if (routeCoordinates.length > 0) {
+      const lats = routeCoordinates.map(c => c[0])
+      const lngs = routeCoordinates.map(c => c[1])
+      bounds = [
+        [Math.min(...lats), Math.min(...lngs)],
+        [Math.max(...lats), Math.max(...lngs)]
+      ]
+    }
+  } else {
+    bounds = [ [25.0, 73.0], [32.0, 80.0] ]
+  }
+
   return (
-    <div className="h-full w-full rounded-xl overflow-hidden border z-0 relative">
+    <div className="h-full w-full rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 shadow-inner">
       <MapContainer 
-        center={[29.5, 77.5]} 
-        zoom={7} 
-        scrollWheelZoom={true} 
-        className="h-full w-full"
+        center={[28.6139, 77.2090]} 
+        zoom={6} 
+        style={{ height: "100%", width: "100%" }}
+        zoomControl={false}
       >
         <TileLayer
-          attribution='Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
-          url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+          attribution='&copy; OpenStreetMap contributors'
+          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
         />
-
-        <MapController route={activeRoute} />
-
-        {allCities.map((city, idx) => {
-          // 1. Check if this city should be shown
-          // Show IF (No route is active) OR (City name is in the active route's list)
-          const isVisible = !activeRoute || activeRoute.cityNames.includes(city.name);
-
-          // 2. If not visible, return NULL so the marker doesn't render at all
-          if (!isVisible) return null;
-
-          return (
-            <Marker key={idx} position={city.coords}>
-              <Tooltip 
-                permanent 
-                direction="bottom" 
-                offset={[0, 10]} 
-                className="font-bold text-xs bg-transparent border-0 shadow-none text-black"
-              >
-                {city.name}
-              </Tooltip>
-            </Marker>
-          )
-        })}
-
-        {activeRoute && (
+        {allCities.map((city) => (
+          <Marker 
+            key={city.id} 
+            position={city.coords} 
+            icon={defaultIcon}
+            opacity={activeRoute?.pathNames.includes(city.name) ? 1 : 0.5} 
+          >
+            <Popup className="font-sans">
+              <div className="text-sm font-bold">{city.name}</div>
+              <div className="text-xs text-slate-500">ID: {city.id}</div>
+            </Popup>
+          </Marker>
+        ))}
+        {routeCoordinates.length > 1 && (
           <Polyline 
-            positions={activeRoute.path} 
-            pathOptions={{ 
-              color: activeRoute.color || 'blue', 
-              weight: 4, 
-              opacity: 0.8, 
-              dashArray: "10 5" 
-            }} 
+            positions={routeCoordinates} 
+            pathOptions={{ color: activeRoute?.color || "blue", weight: 4, opacity: 0.8, dashArray: '10, 10' }} 
           />
         )}
+        {bounds && <MapUpdater bounds={bounds} />}
       </MapContainer>
     </div>
   )

@@ -9,53 +9,22 @@ import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
 import { LayoutTextFlip } from "@/components/ui/layout-text-flip";
-import { motion } from "motion/react";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
+import { Card } from "@/components/ui/card"
+import { Loader2, Clock, IndianRupee, Trophy, AlertTriangle, Truck, Package, MapPin, Zap, Ban, Siren } from "lucide-react"
 
-// Import your MultiForm (ensure path is correct)
 import { MultiForm, MultiFormSchema } from "@/components/multiform";
-import { mapFormToOrders, getOrderTypeForForm } from "@/lib/order-mapper";
-import { api } from "@/lib/api-client";
-
-// Types import
-import { City, RouteData } from "@/components/MapDisplay"
-
-
+import { NORTH_INDIA_CITIES, City } from "@/components/cityData"
 
 const MapDisplay = dynamic(() => import('@/components/MapDisplay'), { 
   ssr: false, 
   loading: () => (
-    <div className="h-full w-full bg-slate-900 animate-pulse rounded-xl flex items-center justify-center text-slate-500">
-      Loading Route Visualization...
+    <div className="h-full w-full bg-slate-100 dark:bg-slate-800 animate-pulse rounded-xl flex items-center justify-center text-slate-500 text-sm">
+      Loading Route Map...
     </div>
   )
 });
-
-// --- DATA ---
-const NORTH_INDIA_CITIES: City[] = [
-  { name: "Delhi", coords: [28.6139, 77.2090] },
-  { name: "Jaipur", coords: [26.9124, 75.7873] },
-  { name: "Lucknow", coords: [26.8467, 80.9462] },
-  { name: "Chandigarh", coords: [30.7333, 76.7794] },
-  { name: "Agra", coords: [27.1767, 78.0081] },
-  { name: "Ambala", coords: [30.3782, 76.7767] },
-  { name: "Kanpur", coords: [26.4499, 80.3319] },
-  // ... (You can keep your full list here, heavily abbreviated for brevity)
-]
-
-function LayoutTextFlipDemo() {
-  return (
-    <div >
-      <motion.div className="relative mx-4 my-4 flex flex-col items-center justify-center gap-4 text-center sm:mx-0 sm:mb-0 sm:flex-row">
-        <LayoutTextFlip
-          text="Operations Dashboard: "
-          words={["Logistics", "Planning", "Routing", "Analytics"]}
-        />
-      </motion.div>
-    </div>
-  );
-}
 
 function SafeContent({ children }: { children: React.ReactNode }) {
   const { open, isMobile } = useSidebar()
@@ -73,241 +42,256 @@ function SafeContent({ children }: { children: React.ReactNode }) {
   )
 }
 
-const cityOptions = NORTH_INDIA_CITIES.map(c => c.name).sort();
+// --- TYPES ---
+interface PayloadOrder {
+  orderId: number;
+  sellerId: number;
+  source: number;
+  destination: number;
+  weight: number;
+  volume: number;
+  priority: number;
+  description?: string;
+  sourceName?: string;
+  destName?: string;
+}
+
+// FIX: Added 'path' to the interface to solve TypeScript error 2339
+interface BackendRoute {
+  orderId?: number | string;
+  model?: string;
+  route?: string[] | { route: string[] } | any; 
+  path?: string[]; // <--- Added this property
+}
+
+interface BackendOrderDetail {
+  orderId: number | string;
+  model: "HubSpoke" | "PointToPoint";
+  time: number;
+  cost: number;
+}
+
+interface HybridModelResult {
+  totalCost: number;       
+  totalTime: number;       
+  orderDetails: BackendOrderDetail[]; 
+  routes: BackendRoute[];             
+}
+
+interface PersonalizedResult {
+  totalCost: number;
+  totalTime: number;
+  routes: BackendRoute[]; 
+}
+
+interface SolverResponse {
+  costEfficient: HybridModelResult;
+  timeEfficient: HybridModelResult;
+  hubSpoke: HybridModelResult;
+  pointToPoint: HybridModelResult;
+  personalized: PersonalizedResult;
+}
 
 export default function Page() {
   const { seller, loading: authLoading, logout } = useAuth();
   const router = useRouter();
-  const [activeRoute, setActiveRoute] = useState<RouteData | null>(null)
-  const [isMapVisible, setIsMapVisible] = useState(false)
+  
   const [submitting, setSubmitting] = useState(false)
-  const [solverResults, setSolverResults] = useState<any[]>([])
-  const [showSolverResults, setShowSolverResults] = useState(false)
+  const [results, setResults] = useState<SolverResponse | null>(null)
+  const [userGoal, setUserGoal] = useState<"cost_efficient" | "speed" | "eco_friendly" | "">("")
+  const [submittedOrders, setSubmittedOrders] = useState<PayloadOrder[]>([])
+  const [isPriorityMode, setIsPriorityMode] = useState(false)
 
-  // Redirect to login if not authenticated
+  const cityOptions = NORTH_INDIA_CITIES.map(c => c.name).sort();
+
   useEffect(() => {
-    if (!authLoading && !seller) {
-      router.push("/login");
-    }
+    if (!authLoading && !seller) router.push("/login");
   }, [seller, authLoading, router]);
 
-  // Show loading state while checking auth
-  if (authLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
+  if (authLoading || !seller) {
+    return <div className="flex items-center justify-center min-h-screen"><Loader2 className="h-12 w-12 animate-spin text-blue-600" /></div>;
   }
 
-  // Don't render if not authenticated
-  if (!seller) {
-    return null;
-  }
-
-  // --- LOGIC: HANDLE FORM SUBMISSION ---
-  const handleFormSubmit = async (data: MultiFormSchema) => {
-    console.log("=== HANDLE FORM SUBMIT CALLED ===");
-    console.log("Form submitted with data:", JSON.stringify(data, null, 2));
-    
-    if (!seller) {
-      console.error("No seller found");
-      toast.error("You must be logged in to submit orders");
-      return;
-    }
-
-    console.log("Seller found:", seller);
+  // --- SUBMIT ---
+  const handleFormSubmit = async (formData: MultiFormSchema) => {
     setSubmitting(true);
-    toast.info("Starting order submission...");
+    setResults(null);
+    setUserGoal(formData.selectFieldGoal as any);
+    setIsPriorityMode(formData.isPriority); 
 
     try {
-      // 1. Map form data to order inputs
-      console.log("Step 1: Mapping form data to orders...");
-      const orderInputs = mapFormToOrders(data, seller.sellerId);
-      console.log("Mapped order inputs:", JSON.stringify(orderInputs, null, 2));
-      
-      if (orderInputs.length === 0) {
-        console.error("No valid orders after mapping");
-        toast.error("No valid orders to submit. Please ensure all orders have valid destinations.");
-        setSubmitting(false);
-        return;
-      }
+      const ordersPayload: PayloadOrder[] = formData.orders.map((order, index) => {
+        const sourceCity = NORTH_INDIA_CITIES.find(c => c.name === order.enterSource);
+        const destCity = NORTH_INDIA_CITIES.find(c => c.name === order.enterDestination);
+        
+        let priorityVal = 100 + index; 
+        if (formData.isPriority && formData.priorityQueue) {
+            const rankIndex = formData.priorityQueue.indexOf(index);
+            if (rankIndex !== -1) priorityVal = rankIndex + 1;
+        } 
 
-      // Validate all orders have valid destinations
-      const invalidOrders = orderInputs.filter((order) => !order.destination || order.destination === 0);
-      if (invalidOrders.length > 0) {
-        console.error("Invalid orders found:", invalidOrders);
-        toast.error(`Invalid destination for ${invalidOrders.length} order(s). Please check your city selections.`);
-        setSubmitting(false);
-        return;
-      }
-
-      const orderType = getOrderTypeForForm(data);
-      console.log("Order type determined:", orderType);
-
-      // 2. Submit all orders to the API (save to database)
-      console.log("Step 2: Saving orders to database...");
-      toast.info(`Saving ${orderInputs.length} order(s) to database...`);
-      
-      const createdOrders = [];
-      for (let index = 0; index < orderInputs.length; index++) {
-        const orderInput = orderInputs[index];
-        try {
-          console.log(`Creating order ${index + 1}/${orderInputs.length}:`, JSON.stringify(orderInput, null, 2));
-          const result = await api.createOrder(orderType, orderInput);
-          console.log(`Order ${index + 1} created successfully:`, JSON.stringify(result, null, 2));
-          createdOrders.push(result);
-        } catch (err) {
-          console.error(`Error creating order ${index + 1}:`, orderInput, err);
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          toast.error(`Failed to create order ${index + 1}: ${errorMessage}`);
-          // Continue with other orders instead of failing completely
-        }
-      }
-      
-      if (createdOrders.length === 0) {
-        throw new Error("Failed to create any orders. Please check the console for details.");
-      }
-      
-      console.log("Created orders:", JSON.stringify(createdOrders, null, 2));
-      console.log(`Successfully created ${createdOrders.length} out of ${orderInputs.length} order(s)`);
-
-      toast.success(`Successfully saved ${createdOrders.length} order(s) to database!`);
-
-      // 3. Call solver API for each order
-      console.log("Step 3: Calling solver API for optimization...");
-      const goal = data.selectFieldGoal; // 'cost_efficient', 'speed', 'eco_friendly'
-      // Map our goal to solver's expected format: 'cost' or 'time'
-      const solverGoal = goal === 'speed' ? 'time' : 'cost';
-      console.log("Solver goal:", solverGoal);
-
-      toast.info("Processing orders with C++ solver...");
-
-      const solverPromises = createdOrders.map(async (order, index) => {
-        try {
-          console.log(`Calling solver for order ${index + 1}/${createdOrders.length} (ID: ${order.orderId})...`);
-          const solverPayload = {
-            orderDetails: {
-              orderId: order.orderId,
-              sellerId: order.sellerId,
-              source: order.source,
-              destination: order.destination,
-              weight: order.weight,
-              volume: order.volume,
-              priority: order.priority,
-            },
-            goal: solverGoal,
-          };
-          console.log("Solver payload:", JSON.stringify(solverPayload, null, 2));
-
-          const response = await fetch('/api/solve', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(solverPayload),
-          });
-
-          console.log(`Solver response status for order ${order.orderId}:`, response.status);
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Solver API error for order ${order.orderId}:`, errorText);
-            throw new Error(`Solver API error: ${response.status} ${response.statusText} - ${errorText}`);
-          }
-
-          const result = await response.json();
-          console.log(`Solver result for order ${order.orderId}:`, JSON.stringify(result, null, 2));
-          return result;
-        } catch (err) {
-          console.error(`Solver API error for order ${order.orderId}:`, err);
-          return { 
-            error: `Failed to solve for order ${order.orderId}`, 
-            orderId: order.orderId,
-            details: err instanceof Error ? err.message : String(err)
-          };
-        }
+        return {
+          orderId: Date.now() + index + Math.floor(Math.random() * 1000), 
+          sellerId: seller.sellerId || 101,
+          source: sourceCity ? sourceCity.id : 1,           
+          destination: destCity ? destCity.id : 1,
+          weight: order.orderWeightKg,
+          volume: order.orderVolumeM3,
+          priority: priorityVal, 
+          description: order.orderDescription,
+          sourceName: order.enterSource,
+          destName: order.enterDestination
+        };
       });
 
-      const results = await Promise.all(solverPromises);
-      console.log("All solver results:", JSON.stringify(results, null, 2));
+      setSubmittedOrders(ordersPayload);
       
-      setSolverResults(results);
-      setShowSolverResults(true);
-      toast.success("Solver processing complete! Results displayed below.");
+      const payload = {
+        currentOrders: ordersPayload, 
+        goal: formData.selectFieldGoal === "cost_efficient" ? "cost" : "time",
+        prioritize: formData.isPriority 
+      };
 
-      // 4. Show map visualization (existing logic)
-      console.log("Step 4: Generating map visualization...");
-      const destinationName = data.orders[0]?.enterDestination;
-
-      // Find Coordinates
-      const originCity = NORTH_INDIA_CITIES.find(c => c.name === "Delhi"); // Default Origin
-      const destCity = NORTH_INDIA_CITIES.find(c => c.name === destinationName);
-
-      if (originCity && destCity) {
-        // Generate Route based on Goal
-        let routePath: [number, number][] = [originCity.coords, destCity.coords];
-        let routeColor = "blue"; // Default
-        let intermediateCities: string[] = [];
-
-        if (goal === "speed") {
-          routeColor = "red";
-        } else if (goal === "cost_efficient") {
-          routeColor = "blue";
-          const hub = NORTH_INDIA_CITIES.find(c => c.name === "Agra");
-          if (hub) {
-            routePath = [originCity.coords, hub.coords, destCity.coords];
-            intermediateCities.push("Agra");
-          }
-        } else if (goal === "eco_friendly") {
-          routeColor = "green";
-          const hub1 = NORTH_INDIA_CITIES.find(c => c.name === "Ambala");
-          if (hub1) {
-            routePath = [originCity.coords, hub1.coords, destCity.coords];
-            intermediateCities.push("Ambala");
-          }
-        }
-
-        setActiveRoute({
-          path: routePath,
-          color: routeColor,
-          cityNames: [originCity.name, ...intermediateCities, destCity.name]
-        });
-        
-        setTimeout(() => setIsMapVisible(true), 500);
-        
-        setTimeout(() => {
-          document.getElementById("map-section")?.scrollIntoView({ behavior: 'smooth' });
-        }, 600);
-      } else {
-        console.warn("Could not find cities for map visualization:", { originCity, destCity, destinationName });
+      for (const ord of ordersPayload) {
+        let dbType = "HubSpoke";
+        if (formData.selectFieldGoal === "speed") dbType = "P2P";
+        if (formData.isPriority) dbType = "Personalized";
+        await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: dbType, ...ord }) });
       }
+      toast.success("Orders processed");
 
-      console.log("=== FORM SUBMISSION COMPLETE ===");
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to submit orders";
-      console.error("=== ERROR IN FORM SUBMISSION ===");
-      console.error("Error:", err);
-      console.error("Error details:", {
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-        name: err instanceof Error ? err.name : undefined,
-      });
-      toast.error(`Failed to submit orders: ${message}`);
+      const solveResponse = await fetch('/api/solve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!solveResponse.ok) throw new Error(`Solver failed: ${await solveResponse.text()}`);
+
+      const data: SolverResponse = await solveResponse.json();
+      setResults(data);
+      setTimeout(() => document.getElementById("results-section")?.scrollIntoView({ behavior: 'smooth' }), 200);
+
+    } catch (error: any) {
+      toast.error("Error", { description: error.message });
     } finally {
       setSubmitting(false);
-      console.log("Submission process finished (setSubmitting(false))");
     }
   };
+
+  const getFormatCurrency = (val: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val);
+
+  // --- VIEW LOGIC ---
+  let finalDisplayCost = 0;
+  let finalDisplayTime = 0;
+  let ViewComponent = null;
+
+  if (results) {
+      if (isPriorityMode) {
+          // --- PRIORITY MODE ---
+          const pData = results.personalized;
+          finalDisplayCost = pData?.totalCost || 0;
+          finalDisplayTime = pData?.totalTime || 0;
+          
+          // Fix: Ensure we get the array from the first route object
+          const pRouteObj = pData?.routes?.[0];
+          const pPathArray = pRouteObj ? (pRouteObj.route || pRouteObj.path || []) : [];
+
+          ViewComponent = (
+             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
+                <h3 className="text-2xl font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                    <Siren className="w-6 h-6 text-red-500" /> Priority Fleet Sequence
+                </h3>
+                <div className="bg-blue-500/10 border border-blue-500/20 text-blue-400 p-4 rounded-lg mb-4 text-sm flex items-center gap-2">
+                    <Zap className="w-4 h-4" /> <strong>Active:</strong> Standard routing disabled. Optimization strictly follows priority ranks.
+                </div>
+                <ResultCard 
+                    title="Priority Milk-Run Route"
+                    description="Optimized delivery sequence respecting your priority ranks."
+                    cost={finalDisplayCost}
+                    time={finalDisplayTime}
+                    path={pPathArray} 
+                    color="red"
+                    cities={NORTH_INDIA_CITIES}
+                    badge="Expedited"
+                    isPriority={true}
+                    fallbackPoints={submittedOrders.length >= 2 ? [submittedOrders[0].sourceName, submittedOrders[submittedOrders.length-1].destName] : []}
+                />
+             </div>
+          );
+      } else {
+          // --- STANDARD MODE ---
+          const modelKey = userGoal === 'speed' ? 'timeEfficient' : 'costEfficient';
+          const modelData = results[modelKey];
+          finalDisplayCost = modelData?.totalCost || 0;
+          finalDisplayTime = modelData?.totalTime || 0;
+
+          ViewComponent = (
+             <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4">
+                <h3 className="text-2xl font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                  <Package className="w-6 h-6" /> Individual Order Optimizations
+                </h3>
+                
+                {submittedOrders.map((order, index) => {
+                  const orderSpecifics = modelData?.orderDetails?.find(d => String(d.orderId) === String(order.orderId));
+                  const routeObj = modelData?.routes?.find(r => String(r.orderId) === String(order.orderId)) || modelData?.routes[index];
+                  const finalStats = orderSpecifics || modelData?.orderDetails[index];
+
+                  // Safe extract route
+                  const safeRouteArray = routeObj ? (routeObj.route || routeObj.path || []) : [];
+
+                  const routeCost = finalStats?.cost || 0;
+                  const routeTime = finalStats?.time || 0;
+                  const usedModel = finalStats?.model || (userGoal === 'speed' ? "PointToPoint" : "HubSpoke");
+                  const isOverflow = routeTime < 0 || routeTime > 10000;
+                  
+                  return (
+                      <ResultCard 
+                          key={order.orderId}
+                          title={`Order #${index + 1}: ${order.description || "Shipment"}`}
+                          subtitle={`${order.sourceName} ➝ ${order.destName}`}
+                          description={isOverflow ? "Destination Unreachable" : `Optimized via ${usedModel}`}
+                          cost={routeCost}
+                          time={routeTime}
+                          path={safeRouteArray} 
+                          color={isOverflow ? "gray" : (userGoal === 'speed' ? 'red' : 'blue')}
+                          cities={NORTH_INDIA_CITIES}
+                          badge={isOverflow ? "Error" : (usedModel === 'PointToPoint' ? "Direct Route" : "Hub Consolidated")}
+                          isError={isOverflow}
+                          fallbackPoints={[order.sourceName, order.destName]} 
+                      />
+                  )
+                })}
+
+                {results.personalized && (
+                    <div className="space-y-8 pt-8 border-t border-slate-800">
+                        <h3 className="text-2xl font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                            <Truck className="w-6 h-6 text-yellow-500" /> Private Fleet Option
+                        </h3>
+                        {(() => {
+                            const pRouteObj = results.personalized.routes?.[0];
+                            const pPathArray = pRouteObj ? (pRouteObj.route || pRouteObj.path || []) : [];
+                            return (
+                                <ResultCard 
+                                    title="Dedicated Carrier Route"
+                                    description="A single consolidated route covering your entire manifest."
+                                    cost={results.personalized.totalCost || 0}
+                                    time={results.personalized.totalTime || 0}
+                                    path={pPathArray} 
+                                    color="gold"
+                                    cities={NORTH_INDIA_CITIES}
+                                    badge="Premium Service"
+                                    fallbackPoints={submittedOrders.length >= 2 ? [submittedOrders[0].sourceName, submittedOrders[submittedOrders.length-1].destName] : []}
+                                />
+                            )
+                        })()}
+                    </div>
+                )}
+             </div>
+          );
+      }
+  }
 
   return (
     <SidebarProvider defaultOpen={true}>
       <AppSidebar />
       <SafeContent>
-
-        {/* Header */}
-        <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4 bg-white dark:bg-slate-900 z-10 relative">
+        <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4 bg-white dark:bg-slate-900 z-10 sticky top-0">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-2 h-4" />
           <Breadcrumb>
@@ -317,221 +301,145 @@ export default function Page() {
               <BreadcrumbItem><BreadcrumbPage>Route Planner</BreadcrumbPage></BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
-          {seller && (
-            <div className="ml-auto flex items-center gap-4">
-              <div className="text-sm text-muted-foreground">
-                Logged in as: <span className="font-semibold">{seller.name} (ID: {seller.sellerId})</span>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  logout();
-                  router.push("/");
-                }}
-              >
-                Logout
-              </Button>
+          <div className="ml-auto flex items-center gap-4">
+              <div className="text-sm text-muted-foreground hidden md:block">User: <span className="font-semibold">{seller.name}</span></div>
+              <Button variant="outline" size="sm" onClick={() => { logout(); router.push("/"); }}>Logout</Button>
             </div>
-          )}
         </header>
 
-        <LayoutTextFlipDemo />
-
-        <div className="p-4 space-y-8 flex flex-col pb-20">
-          
-          {/* --- 1. FORM SECTION --- */}
-          <section className="w-full flex justify-center">
-     <div className="w-full max-w-4xl">
-        {/* 2. PASS THE PROP HERE */}
-        <MultiForm 
-           onFormSubmit={handleFormSubmit} 
-           cityOptions={cityOptions}
-        />
-        {submitting && (
-          <div className="mt-4 text-center">
-            <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-              <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
-                Submitting orders to database and calling C++ solver...
-              </span>
-            </div>
-          </div>
-        )}
-        {/* Debug: Test submission directly */}
-        <div className="mt-4 text-center">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              console.log("=== MANUAL TEST SUBMISSION ===");
-              console.log("Seller:", seller);
-              if (!seller) {
-                toast.error("Not logged in");
-                return;
-              }
-              // Create a test form submission
-              const testData: MultiFormSchema = {
-                orders: [{
-                  orderDescription: "Test Order",
-                  enterDestination: "Jaipur",
-                  orderWeightKg: 100,
-                  orderVolumeM3: 5,
-                  orderDeadlineOptional: undefined,
-                }],
-                isPriority: false,
-                priorityQueue: [],
-                selectFieldGoal: "cost_efficient",
-              };
-              console.log("Test data:", testData);
-              handleFormSubmit(testData);
-            }}
-          >
-            🧪 Test Submit (Bypass Form)
-          </Button>
+        {/* INLINED HEADER COMPONENT */}
+        <div className="relative mx-4 my-4 flex flex-col items-center justify-center gap-4 text-center sm:mx-0 sm:mb-0 sm:flex-row">
+        <LayoutTextFlip words={["Hello", "Hola", "Ciao", "Namaste"]} text= {seller.name}  />   
         </div>
-     </div>
-  </section>
+
+        <div className="p-6 space-y-12 pb-24 max-w-7xl mx-auto">
+          <section className="w-full">
+             <MultiForm onFormSubmit={handleFormSubmit} cityOptions={cityOptions} />
+          </section>
+
+          {submitting && (
+            <div className="flex flex-col items-center justify-center py-12 space-y-4">
+              <Loader2 className="h-16 w-16 animate-spin text-blue-600" />
+              <p className="text-slate-500 animate-pulse text-lg font-medium">Calculating Optimal Logistics Networks...</p>
+            </div>
+          )}
           
-          {/* --- 2. SOLVER RESULTS SECTION --- */}
-          {showSolverResults && solverResults.length > 0 && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold text-slate-800 dark:text-white">
-                  🎯 C++ Solver Optimization Results
-                </h2>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setShowSolverResults(false);
-                    setSolverResults([]);
-                  }}
-                >
-                  Hide Results
-                </Button>
-              </div>
-              
-              {solverResults.map((result, index) => (
-                <div
-                  key={index}
-                  className="bg-white dark:bg-slate-900 rounded-xl border-2 border-blue-500 p-6 shadow-lg"
-                >
-                  <h3 className="text-lg font-semibold mb-4 text-slate-900 dark:text-white">
-                    Order {result.orderId || result.error ? `#${result.orderId || 'N/A'}` : `#${index + 1}`}
-                    {result.winner && (
-                      <span className="ml-2 text-sm font-normal text-blue-600 dark:text-blue-400">
-                        (Winner: {result.winner})
-                      </span>
-                    )}
-                  </h3>
-                  
-                  {result.error ? (
-                    <div className="text-red-600 dark:text-red-400 mb-4">
-                      <p className="font-medium">Error:</p>
-                      <p>{result.error}</p>
-                      {result.details && (
-                        <pre className="mt-2 p-4 bg-red-50 dark:bg-red-900/20 rounded-lg overflow-auto text-xs">
-                          {JSON.stringify(result, null, 2)}
-                        </pre>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {/* Hub & Spoke Results */}
-                      {result.hubSpoke && (
-                        <div className="border-l-4 border-blue-500 pl-4">
-                          <h4 className="font-semibold text-slate-900 dark:text-white mb-2">
-                            Hub & Spoke Model
-                          </h4>
-                          <div className="text-sm text-slate-600 dark:text-slate-400 space-y-1">
-                            <p>Total Time: {result.hubSpoke.totalTime?.toFixed(2) || 'N/A'}</p>
-                            <p>Total Cost: {result.hubSpoke.totalCost?.toFixed(2) || 'N/A'}</p>
-                            {result.hubSpoke.orderDetails && (
-                              <p>Orders: {result.hubSpoke.orderDetails.length}</p>
-                            )}
-                          </div>
-                        </div>
-                      )}
+          {results && (
+            <div id="results-section" className="animate-in fade-in slide-in-from-bottom-8 duration-700 space-y-16">
+               <div className="border-b pb-4">
+                  <h2 className="text-4xl font-bold text-slate-800 dark:text-white mb-2">Optimization Results</h2>
+                  <p className="text-slate-500 text-lg">Strategy: <span className="font-semibold text-blue-600">{isPriorityMode ? 'Priority Sequence (Exclusive)' : (userGoal === 'cost_efficient' ? 'Cost Efficiency' : 'Time Efficiency')}</span></p>
+               </div>
 
-                      {/* Point-to-Point Results */}
-                      {result.pointToPoint && (
-                        <div className="border-l-4 border-green-500 pl-4">
-                          <h4 className="font-semibold text-slate-900 dark:text-white mb-2">
-                            Point-to-Point Model
-                          </h4>
-                          <div className="text-sm text-slate-600 dark:text-slate-400 space-y-1">
-                            <p>Total Time: {result.pointToPoint.totalTime?.toFixed(2) || 'N/A'}</p>
-                            <p>Total Cost: {result.pointToPoint.totalCost?.toFixed(2) || 'N/A'}</p>
-                            {result.pointToPoint.orderDetails && (
-                              <p>Orders: {result.pointToPoint.orderDetails.length}</p>
-                            )}
-                          </div>
-                        </div>
-                      )}
+               {/* RENDER VIEW */}
+               {ViewComponent}
 
-                      {/* Personalized Results */}
-                      {result.personalized && (
-                        <div className="border-l-4 border-purple-500 pl-4">
-                          <h4 className="font-semibold text-slate-900 dark:text-white mb-2">
-                            Personalized Model
-                          </h4>
-                          <div className="text-sm text-slate-600 dark:text-slate-400 space-y-1">
-                            <p>Time: {result.personalized.time?.toFixed(2) || 'N/A'}</p>
-                            <p>Cost: {result.personalized.cost?.toFixed(2) || 'N/A'}</p>
-                            {result.personalized.route && (
-                              <p>Route: {result.personalized.route.join(' → ')}</p>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Full JSON - ALWAYS VISIBLE */}
-                      <div className="mt-6">
-                        <h4 className="text-sm font-semibold text-slate-900 dark:text-white mb-2">
-                          📄 Full JSON Response from C++ Solver:
-                        </h4>
-                        <pre className="p-4 bg-slate-100 dark:bg-slate-800 rounded-lg overflow-auto text-xs border border-slate-300 dark:border-slate-700 max-h-96">
-                          {JSON.stringify(result, null, 2)}
-                        </pre>
+               {/* SUMMARY */}
+               <div className="bg-slate-900 text-white rounded-2xl p-8 shadow-2xl">
+                  <h3 className="text-xl font-bold uppercase tracking-widest text-slate-400 mb-6 border-b border-slate-700 pb-2">Manifest Summary</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      <div>
+                          <p className="text-slate-400 text-sm mb-1">Total Estimated Cost</p>
+                          <div className="text-5xl font-bold text-emerald-400">{getFormatCurrency(finalDisplayCost)}</div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* --- 3. MAP SECTION (Visible only after submit) --- */}
-          {isMapVisible && (
-            <div id="map-section" className="animate-in fade-in slide-in-from-bottom-10 duration-700">
-               <div className="mb-4">
-                  <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Route Optimization Result</h2>
-                  <p className="text-slate-500">
-                    Generated route based on your cargo manifest and logistics goal.
-                  </p>
-               </div>
-               
-               <div className="w-full h-[600px] bg-white rounded-2xl shadow-xl border overflow-hidden relative z-0">
-                  <MapDisplay 
-                      allCities={NORTH_INDIA_CITIES} 
-                      activeRoute={activeRoute} 
-                  />
-               </div>
-               
-               <div className="mt-4 flex justify-end">
-                  <button 
-                    onClick={() => setIsMapVisible(false)}
-                    className="text-sm text-slate-500 hover:text-slate-800 underline"
-                  >
-                    Reset & Edit Manifest
-                  </button>
+                      <div>
+                          <p className="text-slate-400 text-sm mb-3">Time Estimate</p>
+                          <div className="flex justify-between items-center bg-slate-800/50 p-3 rounded-lg border border-slate-700">
+                            <span className="text-slate-300 text-sm font-medium">{isPriorityMode ? "Total Sequence Time" : "Max Network Time"}</span>
+                            <span className="font-mono font-bold text-white flex items-center gap-2">
+                                <Clock className="w-3 h-3 text-yellow-400" /> {finalDisplayTime} Day(s)
+                            </span>
+                          </div>
+                      </div>
+                  </div>
                </div>
             </div>
           )}
-
         </div>
       </SafeContent>
     </SidebarProvider>
+  )
+}
+
+function ResultCard({ title, subtitle, description, cost, time, path, color, cities, badge, isError, fallbackPoints }: any) {
+  const formatCurrency = (val: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val);
+  
+  let safePath: string[] = [];
+  try {
+      if (Array.isArray(path)) safePath = path.filter(i => typeof i === 'string');
+      else if (path && typeof path === 'object') {
+          if (Array.isArray(path.route)) safePath = path.route.filter((i:any) => typeof i === 'string');
+          else if (Array.isArray(path.path)) safePath = path.path.filter((i:any) => typeof i === 'string');
+          else safePath = Object.values(path).filter(v => typeof v === 'string') as string[];
+      }
+  } catch (e) { console.error("Path parsing error", e); }
+
+  const displayPath = safePath.length > 0 ? safePath : (fallbackPoints || []);
+  const isFallback = safePath.length === 0 && displayPath.length > 0;
+
+  return (
+    <Card className={`relative overflow-hidden transition-all duration-300 shadow-lg border-2 border-slate-200 dark:border-slate-800`}>
+      <div className="flex flex-col lg:flex-row min-h-[400px]">
+        <div className="p-8 lg:w-1/3 flex flex-col border-b lg:border-b-0 lg:border-r border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900/50 relative z-20">
+          <div className="mb-8">
+             <div className="flex items-center gap-3 mb-2">
+                <div className={`p-2 rounded-lg ${isError ? 'bg-slate-200 text-slate-500' : (color === 'blue' ? 'bg-blue-100 text-blue-600' : (color === 'red' ? 'bg-red-100 text-red-600' : 'bg-yellow-100 text-yellow-600'))}`}>
+                   {isError ? <AlertTriangle className="w-6 h-6"/> : (color === 'gold' ? <Truck className="w-6 h-6" /> : (color === 'red' ? <Zap className="w-6 h-6"/> : <Package className="w-6 h-6" />))}
+                </div>
+                <div>
+                   <h3 className="text-xl font-bold text-slate-900 dark:text-white leading-tight">{title}</h3>
+                   {subtitle && <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mt-1">{subtitle}</p>}
+                </div>
+             </div>
+             <p className="text-slate-500 dark:text-slate-400 text-sm leading-relaxed">{description}</p>
+             {isFallback && !isError && <p className="text-xs text-amber-500 mt-2 italic">Note: Detailed route data unavailable. Showing direct path.</p>}
+          </div>
+          {!isError && (
+            <div className="grid grid-cols-1 gap-4 mt-auto">
+                <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center gap-2 text-slate-500 mb-1"><IndianRupee className="w-4 h-4" /> <span className="text-xs uppercase font-bold tracking-wider">Cost</span></div>
+                <div className="text-2xl font-bold text-slate-800 dark:text-slate-100">{formatCurrency(cost || 0)}</div>
+                </div>
+                <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center gap-2 text-slate-500 mb-1"><Clock className="w-4 h-4" /> <span className="text-xs uppercase font-bold tracking-wider">Time</span></div>
+                <div className="text-2xl font-bold text-slate-800 dark:text-slate-100">{time || 0} Day(s)</div>
+                </div>
+            </div>
+          )}
+          {isError && (
+              <div className="mt-auto p-4 bg-red-50 border border-red-100 rounded-xl text-red-600 text-sm">
+                  <strong>Route Calculation Failed.</strong><br/>The locations appear to be disconnected in the network graph.
+              </div>
+          )}
+        </div>
+        <div className="lg:w-2/3 bg-slate-50 dark:bg-slate-900 relative">
+           {(displayPath.length === 0) ? (
+             <div className="h-full flex flex-col items-center justify-center text-slate-400 gap-3 min-h-[400px]">
+               <Ban className="w-10 h-10 opacity-30" /> 
+               <span className="font-medium">No valid route path found.</span>
+             </div>
+           ) : (
+             <>
+                <div className="absolute inset-0 z-0">
+                    <MapDisplay allCities={cities} activeRoute={{ pathNames: displayPath, color: isError ? "gray" : (isFallback ? "orange" : color) }} />
+                </div>
+                <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-4">
+                    <div className="flex justify-end">
+                        {badge && <div className={`px-4 py-1 text-xs font-bold text-white uppercase tracking-wider rounded-lg shadow-md ${isError ? 'bg-slate-600' : (color === 'red' ? 'bg-red-500' : (color === 'gold' ? 'bg-yellow-600' : 'bg-blue-600'))}`}>{badge}</div>}
+                    </div>
+                    <div className="pointer-events-auto bg-white/95 backdrop-blur px-4 py-3 rounded-lg shadow-xl border border-slate-200 max-w-fit self-start">
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1"><MapPin className="w-3 h-3" /> Route Path</div>
+                        <div className="text-xs font-semibold text-slate-800 flex flex-wrap gap-1 leading-relaxed">
+                            {displayPath.map((city: string, i: number) => (
+                                <span key={i} className="flex items-center">{city} {i < displayPath.length - 1 && <span className="mx-1 text-slate-400">→</span>}</span>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+             </>
+           )}
+        </div>
+      </div>
+    </Card>
   )
 }
