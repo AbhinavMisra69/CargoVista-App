@@ -106,7 +106,17 @@ export const api = {
     }
   
     return res.json();
-  }
+  },
+  listSellers: async () => {
+    const res = await fetch("/api/sellers");
+  
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "Failed to fetch sellers");
+    }
+  
+    return res.json();
+  },
 };
 
 
