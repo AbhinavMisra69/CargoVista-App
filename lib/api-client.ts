@@ -4,6 +4,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   console.log(`[API] Fetching: ${path}`, { method: init?.method || 'GET', body: init?.body });
   
@@ -71,7 +72,42 @@ export const api = {
     }
 
     return response.json();
+  },
+  listOrders: async (type: string, sellerId?: number) => {
+    let dbType = "HubSpoke";
+
+    if (type === "speed") dbType = "P2P";
+    if (type === "priority") dbType = "Personalized";
+
+    const query = new URLSearchParams({
+      type: dbType,
+      ...(sellerId !== undefined ? { sellerId: String(sellerId) } : {}),
+    });
+
+    const res = await fetch(`/api/orders?${query.toString()}`);
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "Failed to fetch orders");
+    }
+
+    return res.json();
+  },
+  createSeller: async (input: any) => {
+    const res = await fetch("/api/sellers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "Failed to create seller");
+    }
+  
+    return res.json();
   }
 };
+
 
 
