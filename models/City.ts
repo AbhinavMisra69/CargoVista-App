@@ -10,7 +10,7 @@ export interface ICity extends Document {
 }
 
 // 2. Define the Schema
-const CitySchema: Schema = new Schema({
+export const CitySchema: Schema = new Schema({
   id: { type: Number, required: true, unique: true },
   name: { type: String, required: true },
   lat: { type: Number, required: true },
