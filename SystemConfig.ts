@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { SystemConfig } from '@/types'; 
-import { CitySchema } from './City';
+import { CitySchema } from './models/City';
 
 interface ISystemConfigDocument extends SystemConfig, Document {}
 
