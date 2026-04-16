@@ -34,7 +34,7 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       message: "MongoDB connected successfully",
-      dbName: conn.connection.db.databaseName,
+      dbName: conn.connection.db?.databaseName || "unknown",
       readyState: conn.connection.readyState,
       uriInfo,
     });
