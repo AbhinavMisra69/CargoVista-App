@@ -1,8 +1,9 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import dbConnect from '@/lib/dbConnect';
-import SystemConfig from '@/models/SystemConfig';
-import { HubSpokeOrder, P2POrder, PersonalizedOrder } from '@/models/Order';
+import { SystemConfig } from "@/models/SystemConfig"; // ✅ FIXED (named import)
+import { HubSpokeOrder, P2POrder, PersonalizedOrder } from "@/models/orders"; // ✅ ensure file exists with exact casing
+
 import { NextResponse } from 'next/server';
 
 export async function POST(req: Request) {
